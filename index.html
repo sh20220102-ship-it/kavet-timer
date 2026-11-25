@@ -23,8 +23,12 @@ button:focus-visible{outline:3px solid #e0242b;outline-offset:2px}
 button.main{background:#e0242b;border-color:#e0242b;color:#fff;font-weight:700;min-width:104px}
 button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-color:var(--on)}
 .hint{font-size:13px;color:var(--muted);text-align:center;max-width:340px;line-height:1.5}
-#sound-unlock{display:none;position:fixed;top:0;left:0;right:0;z-index:20;margin:0;max-width:none;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top,0px));background:var(--on);color:var(--on-fg);font-size:14px;cursor:pointer}
-#sound-unlock.show{display:block}
+[hidden]{display:none!important}
+#repRow{align-items:center;gap:12px}
+#repRow button{padding:6px 16px;font-size:18px;line-height:1.2}
+#repRow button:disabled{opacity:.4;cursor:default}
+#repNum{font-size:22px;min-width:28px;text-align:center;font-variant-numeric:tabular-nums}
+.reptxt{font-size:15px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -52,24 +56,32 @@ button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-
   </div>
 
   <div class="row" id="presets">
+    <button class="chip" data-set="50:집중,10:휴식" aria-pressed="false">50+10 세트</button>
     <button class="chip" data-min="50" data-label="집중" aria-pressed="false">50분 집중</button>
     <button class="chip" data-min="10" data-label="휴식" aria-pressed="false">10분 휴식</button>
     <button class="chip" data-min="25" data-label="집중" aria-pressed="true">25분 집중</button>
     <button class="chip" data-min="5" data-label="휴식" aria-pressed="false">5분 휴식</button>
   </div>
 
+  <div class="row" id="repRow" hidden>
+    <span class="reptxt">세트 반복</span>
+    <button id="repMinus" aria-label="횟수 줄이기">−</button>
+    <strong id="repNum">6</strong>
+    <button id="repPlus" aria-label="횟수 늘리기">+</button>
+    <span class="reptxt">회</span>
+  </div>
+
   <p class="hint">원판을 눌러 끌면 1분 단위로 시간을 직접 맞출 수 있어요. 스페이스바로 시작·정지합니다.</p>
 </main>
-<p class="hint" id="sound-unlock" role="status">알람이 울리려면 화면을 한 번 눌러 주세요</p>
 
 <script>
 (function () {
   var C = 200, R = 104, NS = "http://www.w3.org/2000/svg";
   var svg = document.getElementById("timer"), wedge = document.getElementById("wedge");
   var clock = document.getElementById("clock"), statusEl = document.getElementById("status");
-  var go = document.getElementById("go"), resetBtn = document.getElementById("reset");
+  var go = document.getElementById("go"), resetBtn = document.getElementById("reset"), repRow = document.getElementById("repRow"), repNum = document.getElementById("repNum"), repMinus = document.getElementById("repMinus"), repPlus = document.getElementById("repPlus");
   var chips = document.querySelectorAll(".chip");
-  var total = 25 * 60, rem = total, running = false, endAt = 0, timer = 0, alarm = 0, label = "집중", audio = null, bellBuf = null, bellSrc = null;
+  var total = 25 * 60, rem = total, running = false, endAt = 0, timer = 0, alarm = 0, label = "집중", audio = null, bellBuf = null, bellSrc = null, steps = [], setDef = null, reps = 6;
 
   function pt(m, r) { var a = m * 6 * Math.PI / 180; return [C - r * Math.sin(a), C - r * Math.cos(a)]; }
   function el(n, attrs, parent) {
@@ -102,9 +114,10 @@ button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-
     wedge.setAttribute("d", d);
     var s = Math.ceil(rem);
     clock.textContent = pad(Math.floor(s / 60)) + ":" + pad(s % 60);
-    statusEl.textContent = rem <= 0 ? (alarm ? "시간이 끝났어요 · 화면을 누르면 알람이 꺼져요" : "시간이 끝났어요") : label;
+    statusEl.textContent = rem <= 0 ? (alarm ? "시간이 끝났어요 · 화면을 누르면 알람이 꺼져요" : "시간이 끝났어요") : label + (setDef ? " · " + (Math.floor((setDef.length * reps - steps.length - 1) / setDef.length) + 1) + "/" + reps + "세트" : "") + (steps.length ? " · 다음 " + steps[0][1] + " " + steps[0][0] + "분" : "");
     go.textContent = running ? "일시정지" : (rem <= 0 ? "다시 시작" : "시작");
-    document.title = clock.textContent + " · Kavet Timer";
+    repRow.hidden = !setDef; repNum.textContent = reps; repMinus.disabled = repPlus.disabled = running;
+    document.title = (running ? clock.textContent + " · " : "") + "Kavet Timer";
   }
 
   // alarm: uploaded school-bell sound (embedded mp3), played once; a tap or key press stops it early
@@ -159,22 +172,7 @@ button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-
   }
   function stopAlarm() {
     if (!alarm) return;
-    clearTimeout(alarm); clearInterval(alarm); alarm = 0; stopBell(); render();
-    if (queuedBreakMin != null) {
-      var mins = queuedBreakMin;
-      queuedBreakMin = null;
-      setTimeout(function () {
-        if (running) return;
-        total = rem = mins * 60;
-        label = "휴식";
-        var match = null;
-        chips.forEach(function (c) {
-          if (+c.dataset.min === mins && c.dataset.label === "휴식") match = c;
-        });
-        setChip(match);
-        start();
-      }, 400);
-    }
+    clearInterval(alarm); alarm = 0; stopBell(); render();
   }
   function startAlarm() {
     stopAlarm(); burst();
@@ -188,23 +186,50 @@ button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-
     if (!running) return;
     rem = (endAt - Date.now()) / 1000;
     if (rem <= 0) {
-      rem = 0; running = false; clearInterval(timer);
-      if (pendingBreakMin != null) { queuedBreakMin = pendingBreakMin; pendingBreakMin = null; }
-      startAlarm(); render(); return;
+      if (steps.length) {
+        var nx = steps.shift();
+        total = rem = nx[0] * 60; label = nx[1]; endAt = Date.now() + rem * 1000;
+        startAlarm(); render(); return;
+      }
+      rem = 0; running = false; clearInterval(timer); unlockScreen(); startAlarm(); render(); return;
     }
     render();
   }
 
+  function loadSet() {
+    var seq = [];
+    for (var k = 0; k < reps; k++) seq = seq.concat(setDef);
+    steps = seq.slice(1); total = rem = seq[0][0] * 60; label = seq[0][1];
+  }
+  function changeReps(d) {
+    if (running) return;
+    reps = Math.max(1, Math.min(12, reps + d));
+    if (setDef) loadSet();
+    render();
+  }
+  repMinus.addEventListener("click", function () { changeReps(-1); });
+  repPlus.addEventListener("click", function () { changeReps(1); });
+  var wake = null;
+  function lockScreen() {
+    try {
+      if (navigator.wakeLock && !wake) navigator.wakeLock.request("screen").then(function (l) {
+        wake = l; l.addEventListener("release", function () { wake = null; });
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  function unlockScreen() { try { if (wake) wake.release(); } catch (e) {} wake = null; }
+  document.addEventListener("visibilitychange", function () { if (running && document.visibilityState === "visible") lockScreen(); });
   function start() {
     ensureAudio();
-    if (rem <= 0) rem = total;
+    if (rem <= 0) { if (setDef) loadSet(); else rem = total; }
     running = true; endAt = Date.now() + rem * 1000;
+    lockScreen();
     clearInterval(timer); timer = setInterval(tick, 200); tick();
   }
-  function pause() { running = false; clearInterval(timer); render(); }
+  function pause() { running = false; clearInterval(timer); unlockScreen(); render(); }
 
   go.addEventListener("click", function () { running ? pause() : start(); });
-  resetBtn.addEventListener("click", function () { pause(); rem = total; render(); });
+  resetBtn.addEventListener("click", function () { pause(); if (setDef) loadSet(); else rem = total; render(); });
   document.getElementById("preview").addEventListener("click", function () { ensureAudio(burst); });
   document.addEventListener("keydown", function (e) {
     if (e.code === "Space" && e.target.tagName !== "BUTTON") { e.preventDefault(); running ? pause() : start(); }
@@ -216,7 +241,14 @@ button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-
   chips.forEach(function (c) {
     c.addEventListener("click", function () {
       var wasRunning = running; pause();
-      total = rem = +c.dataset.min * 60; label = c.dataset.label; setChip(c); render();
+      if (c.dataset.set) {
+        setDef = c.dataset.set.split(",").map(function (x) { var p = x.split(":"); return [+p[0], p[1]]; });
+        loadSet();
+      } else {
+        setDef = null; steps = [];
+        total = rem = +c.dataset.min * 60; label = c.dataset.label;
+      }
+      setChip(c); render();
       if (wasRunning) start();
     });
   });
@@ -230,7 +262,7 @@ button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-
     var a = Math.atan2(x, -y) * 180 / Math.PI; if (a < 0) a += 360;
     var m = Math.round(((360 - a) % 360) / 6), prev = Math.round(rem / 60);
     if (prev >= 45 && m <= 10) m = 60; else if (prev <= 15 && m >= 50) m = 0;
-    rem = total = m * 60; label = "직접 설정"; setChip(null);
+    rem = total = m * 60; label = "직접 설정"; setChip(null); setDef = null; steps = [];
     if (running) {
       if (rem <= 0) { pause(); } else endAt = Date.now() + rem * 1000;
     }
@@ -240,74 +272,6 @@ button.chip[aria-pressed="true"]{background:var(--on);color:var(--on-fg);border-
   svg.addEventListener("pointermove", function (e) { if (dragging) fromPointer(e); });
   svg.addEventListener("pointerup", function () { dragging = false; });
   svg.addEventListener("pointercancel", function () { dragging = false; });
-
-  var pendingBreakMin = null, queuedBreakMin = null;
-  var soundUnlock = document.getElementById("sound-unlock");
-
-  function minutesFromParam(v) {
-    if (v == null || v === "") return null;
-    if (!/^\d+$/.test(String(v).trim())) return null;
-    var n = parseInt(v, 10);
-    if (n < 1 || n > 180) return null;
-    return n;
-  }
-  function hideSoundUnlock() {
-    if (soundUnlock) soundUnlock.classList.remove("show");
-  }
-  function unlockSound() {
-    ensureAudio(function () {
-      try {
-        if (!audio) return;
-        if (audio.state === "suspended") audio.resume();
-        var b = audio.createBuffer(1, 1, 22050);
-        var s = audio.createBufferSource();
-        s.buffer = b; s.connect(audio.destination); s.start();
-      } catch (e) {}
-      if (audio && audio.state === "running") hideSoundUnlock();
-    });
-  }
-  function showSoundUnlockIfNeeded() {
-    setTimeout(function () {
-      if (audio && audio.state === "running") { hideSoundUnlock(); return; }
-      if (soundUnlock) soundUnlock.classList.add("show");
-    }, 250);
-  }
-
-  document.addEventListener("pointerdown", unlockSound, true);
-  document.addEventListener("keydown", unlockSound, true);
-  if (soundUnlock) {
-    soundUnlock.addEventListener("click", function (e) {
-      e.preventDefault();
-      unlockSound();
-    });
-  }
-
-  (function applyUrlParams() {
-    var q = new URLSearchParams(location.search);
-    var paramMin = minutesFromParam(q.get("min"));
-    var paramBreak = minutesFromParam(q.get("break"));
-    var paramLabel = q.get("label");
-    if (paramLabel) {
-      paramLabel = paramLabel.trim();
-      if (paramLabel.length > 40) paramLabel = paramLabel.slice(0, 40);
-    }
-    if (paramMin == null) return;
-    total = rem = paramMin * 60;
-    label = paramLabel || "집중";
-    pendingBreakMin = paramBreak;
-    var match = null;
-    chips.forEach(function (c) {
-      if (+c.dataset.min === paramMin && c.dataset.label === label) match = c;
-    });
-    if (!match && !paramLabel) {
-      chips.forEach(function (c) {
-        if (+c.dataset.min === paramMin) match = match || c;
-      });
-    }
-    setChip(match);
-    start();
-    showSoundUnlockIfNeeded();
-  })();
 
   render();
 })();
